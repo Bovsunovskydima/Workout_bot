@@ -61,7 +61,6 @@ class ReportGenerator:
 
 
     def format_exercise_confirmation(self, exercise_data: Dict[str, Any]) -> str:
-        """Форматує підтвердження додавання вправи"""
         text = f"✅ Додано: {exercise_data['exercise'].capitalize()}"
         text += f", повторень - {exercise_data['reps']}"
 
