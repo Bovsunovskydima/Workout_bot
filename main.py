@@ -20,7 +20,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 def main():
-    """Головна функція запуску бота"""
 
     
     db = DatabaseManager()
