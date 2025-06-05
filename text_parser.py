@@ -71,18 +71,17 @@ class TextParser:
             'set_number': None
         }
 
-        # Визначаємо назву вправи
         exercise_match = re.match(r'^([а-яіїєґ\s\-]+?)(?:,|\s+\d|\s+[а-яіїєґ\-]+\s(?:раз|повторень|підхід|сет|кг))', text)
         if exercise_match:
             result['exercise'] = exercise_match.group(1).strip()
         else:
-            words = text.split(',')  # запасний варіант
+            words = text.split(',')  
             if words:
                 result['exercise'] = words[0].strip()
 
-        search_from = 0  # індекс з якого починаємо шукати вагу
+        search_from = 0  
 
-        # Парсимо повторення
+       
         reps_pattern = r'([\d\.,]+|\w+(?:\s\w+)*)\s*(?:' + '|'.join(self.reps_synonyms) + r')'
         reps_match = re.search(reps_pattern, text)
         if reps_match:
@@ -92,7 +91,7 @@ class TextParser:
                 result['reps'] = reps
                 search_from = max(search_from, reps_match.end())
 
-        # Парсимо підхід
+       
         set_pattern = r'([\d\.,]+|\w+(?:\s\w+)*)\s*(?:' + '|'.join(self.set_synonyms) + r')'
         set_match = re.search(set_pattern, text[search_from:])
         if set_match:
@@ -102,7 +101,7 @@ class TextParser:
                 result['set_number'] = set_num
                 search_from += set_match.end()
 
-        # Парсимо вагу — після останнього знайденого параметра
+       
         weight_pattern = r'([\d\.,]+|\w+(?:\s\w+)*)\s*(?:' + '|'.join(self.weight_synonyms) + r')'
         weight_match = re.search(weight_pattern, text[search_from:])
         if weight_match:
@@ -114,7 +113,7 @@ class TextParser:
                 if weight is not None:
                     result['weight'] = float(weight)
 
-        # Нормалізація назви вправи
+        
         if result['exercise']:
             result['exercise'] = result['exercise'].strip().lower().rstrip(",. ")
 
@@ -122,11 +121,11 @@ class TextParser:
             return result
 
 
-        # Нормалізація назви вправи
+        
         if result['exercise']:
             result['exercise'] = result['exercise'].strip().lower().rstrip(",. ")
 
-        # Перевірка обов’язкових полів
+        
         if result['exercise'] and result['reps'] is not None:
             return result
 
