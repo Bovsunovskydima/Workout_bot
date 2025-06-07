@@ -1,132 +1,65 @@
 import re
-from typing import Dict, Optional
+import json
+import logging
+from openai import OpenAI
+from typing import Optional, Dict, Any, Tuple
+from database import DatabaseManager
 
 class TextParser:
-    def __init__(self):
-        self.numbers_ua = {
-            'нуль': 0, 'нульовий': 0,
-            'один': 1, 'одна': 1, 'перший': 1, 'перша': 1,
-            'два': 2, 'дві': 2, 'другий': 2, 'друга': 2,
-            'три': 3, 'третій': 3, 'третя': 3,
-            'чотири': 4, 'четвертий': 4, 'четверта': 4,
-            'п\'ять': 5, 'пять': 5, 'п\'ятий': 5, 'пятий': 5,
-            'шість': 6, 'шостий': 6,
-            'сім': 7, 'сьомий': 7,
-            'вісім': 8, 'восьмий': 8,
-            'дев\'ять': 9, 'девять': 9, 'дев\'ятий': 9, 'девятий': 9,
-            'десять': 10, 'десятий': 10,
-            'одинадцять': 11, 'одинадцятий': 11,
-            'дванадцять': 12, 'дванадцятий': 12,
-            'тринадцять': 13, 'тринадцятий': 13,
-            'чотирнадцять': 14, 'чотирнадцятий': 14,
-            'п\'ятнадцять': 15, 'пятнадцять': 15, 'п\'ятнадцятий': 15,
-            'шістнадцять': 16, 'шістнадцятий': 16,
-            'сімнадцять': 17, 'сімнадцятий': 17,
-            'вісімнадцять': 18, 'вісімнадцятий': 18,
-            'дев\'ятнадцять': 19, 'девятнадцять': 19,
-            'двадцять': 20, 'двадцятий': 20,
-            'тридцять': 30, 'тридцятий': 30,
-            'сорок': 40, 'сороковий': 40,
-            'п\'ятдесят': 50, 'пятдесят': 50, 'п\'ятдесятий': 50,
-            'шістдесят': 60, 'шістдесятий': 60,
-            'сімдесят': 70, 'сімдесятий': 70,
-            'вісімдесят': 80, 'вісімдесятий': 80,
-            'дев\'яносто': 90, 'девяносто': 90,
-            'сто': 100, 'сотий': 100
-        }
+    def __init__(self, db: DatabaseManager, openai_client: OpenAI, model_name="gpt-4o"):
+        self.db = db
+        self.client = openai_client
+        self.model = model_name
 
-        self.weight_synonyms = ['кг', 'кіло', 'кілограм', 'килограм', 'kg']
-        self.reps_synonyms = ['раз', 'разів', 'повторень', 'повторення']
-        self.set_synonyms = ['підхід', 'сета', 'сет', 'set']
+    def get_available_exercises(self) -> list[str]:
+        return [ex.lower() for ex in self.db.get_all_exercises()]
+
+    def build_prompt(self, message: str) -> str:
+        exercises = self.get_available_exercises()
+        examples = [
+            ("Я зробив 3 підходи по 10 підтягувань без ваги", 
+             '{"exercise": "підтягування", "reps": 10, "weight": null, "set_number": 3}'),
+            ("Жим лежачи: 12 повторів з вагою 50 кг", 
+             '{"exercise": "жим лежачи", "reps": 12, "weight": 50, "set_number": null}'),
+            ("10 присідань, 20 кг", 
+             '{"exercise": "присідання", "reps": 10, "weight": 20, "set_number": null}')
+        ]
         
-        self.prefix_words = ['зробив', 'зробила', 'виконав', 'виконала']
+        return f"""
+Аналізуй повідомлення про вправу і поверни JSON. Доступні вправи: {', '.join(exercises)}
+Якщо вправи немає у списку - поверни "unknown_exercise": true.
+Якщо не можеш розпізнати - поверни "unrecognized": true.
 
-    def convert_ua_number_to_int(self, text: str) -> Optional[int]:
-        text = text.lower().strip().replace("’", "'")
-        if text.isdigit():
-            return int(text)
+Приклади:
+{chr(10).join(f"- {input} → {output}" for input, output in examples)}
 
-        words = text.split()
-        total = 0
-        for word in words:
-            word = word.strip()
-            if word in self.numbers_ua:
-                total += self.numbers_ua[word]
-            elif word.isdigit():
-                total += int(word)
+Повідомлення для аналізу: "{message}"
+"""
 
-        return total if total > 0 else None
-
-    def parse_exercise_input(self, text: str) -> Optional[Dict[str, any]]:
-        text = text.lower().strip().replace("’", "'")
-
-        words = text.split()
-        if words and words[0] in self.prefix_words:
-            text = ' '.join(words[1:])
-
-        result = {
-            'exercise': None,
-            'reps': None,
-            'weight': None,
-            'set_number': None
-        }
-
-        exercise_match = re.match(r'^([а-яіїєґ\s\-]+?)(?:,|\s+\d|\s+[а-яіїєґ\-]+\s(?:раз|повторень|підхід|сет|кг))', text)
-        if exercise_match:
-            result['exercise'] = exercise_match.group(1).strip()
-        else:
-            words = text.split(',')  
-            if words:
-                result['exercise'] = words[0].strip()
-
-        search_from = 0  
-
-       
-        reps_pattern = r'([\d\.,]+|\w+(?:\s\w+)*)\s*(?:' + '|'.join(self.reps_synonyms) + r')'
-        reps_match = re.search(reps_pattern, text)
-        if reps_match:
-            reps_raw = reps_match.group(1).strip()
-            reps = self.convert_ua_number_to_int(reps_raw)
-            if reps is not None:
-                result['reps'] = reps
-                search_from = max(search_from, reps_match.end())
-
-       
-        set_pattern = r'([\d\.,]+|\w+(?:\s\w+)*)\s*(?:' + '|'.join(self.set_synonyms) + r')'
-        set_match = re.search(set_pattern, text[search_from:])
-        if set_match:
-            set_raw = set_match.group(1).strip()
-            set_num = self.convert_ua_number_to_int(set_raw)
-            if set_num is not None:
-                result['set_number'] = set_num
-                search_from += set_match.end()
-
-       
-        weight_pattern = r'([\d\.,]+|\w+(?:\s\w+)*)\s*(?:' + '|'.join(self.weight_synonyms) + r')'
-        weight_match = re.search(weight_pattern, text[search_from:])
-        if weight_match:
-            weight_raw = weight_match.group(1).strip().replace(',', '.')
-            try:
-                result['weight'] = float(weight_raw)
-            except ValueError:
-                weight = self.convert_ua_number_to_int(weight_raw)
-                if weight is not None:
-                    result['weight'] = float(weight)
-
-        
-        if result['exercise']:
-            result['exercise'] = result['exercise'].strip().lower().rstrip(",. ")
-
-        if result['exercise'] and result['reps'] is not None:
-            return result
-
-
-        
-        if result['exercise']:
-            result['exercise'] = result['exercise'].strip().lower().rstrip(",. ")
-
-        
-        if result['exercise'] and result['reps'] is not None:
-            return result
-
-        return None
+    def parse_exercise_input(self, user_message: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+        """Повертає (exercise_data, error_type)"""
+        prompt = self.build_prompt(user_message)
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+                response_format={"type": "json_object"}
+            )
+            content = response.choices[0].message.content
+            data = json.loads(content)
+            
+            if data.get('unrecognized', False):
+                return None, "unrecognized"
+                
+            if data.get('unknown_exercise', False) or data.get('exercise') not in self.get_available_exercises():
+                return None, "unknown_exercise"
+                
+            if not isinstance(data.get('reps', 0), int) or data['reps'] <= 0:
+                return None, "invalid_reps"
+                
+            return data, None
+            
+        except Exception as e:
+            logging.error(f"Помилка парсингу: {str(e)}")
+            return None, "unrecognized"
