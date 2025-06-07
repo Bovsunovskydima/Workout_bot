@@ -1,4 +1,5 @@
 import logging
+import openai
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import ContextTypes
 from database import DatabaseManager
@@ -9,7 +10,8 @@ from report_generator import ReportGenerator
 class WorkoutHandlers:
     def __init__(self):
         self.db = DatabaseManager()
-        self.parser = TextParser()
+        self.openai_client = openai.OpenAI()
+        self.parser = TextParser(db=self.db, openai_client=self.openai_client)
         self.speech_recognizer = SpeechRecognizer()
         self.report_generator = ReportGenerator()
 
@@ -89,33 +91,38 @@ class WorkoutHandlers:
 
         workout_id = self.db.get_active_workout(user_id)
         if not workout_id:
-            await update.message.reply_text("⚠️ Спочатку розпочніть тренування, натиснувши '🏁 Старт тренування'")
+            await update.message.reply_text("⚠️ Спочатку розпочніть тренування")
             return
 
-        exercise_data = self.parser.parse_exercise_input(update.message.text)
-        if not exercise_data:
+        exercise_data, error_type = self.parser.parse_exercise_input(update.message.text)
+        
+        if error_type == "unknown_exercise":
+            exercises_list = self.get_formatted_exercises_list()
+            await update.message.reply_text(
+                f"❌ Вправа '{update.message.text.split()[0]}' не знайдена в довіднику.\n\n"
+                f"{exercises_list}"
+            )
+        elif error_type:
             await update.message.reply_text(
                 "❌ Не можу розпізнати вправу.\n\n"
                 "Спробуйте формат:\n"
                 "'Виконав(-ла) віджимання, 15 разів, 1 підхід'\n"
                 "'Жим лежачи, 12 разів, другий підхід, 80 кг'"
             )
-            return
-
-        try:
-            self.db.add_set(
-                workout_id=workout_id,
-                exercise_name=exercise_data['exercise'],
-                reps=exercise_data['reps'],
-                weight=exercise_data.get('weight'),
-                set_number=exercise_data.get('set_number')
-            )
-            confirmation = self.report_generator.format_exercise_confirmation(exercise_data)
-            await update.message.reply_text(confirmation)
-
-        except ValueError as e:
-            exercises_list = self.get_formatted_exercises_list()
-            await update.message.reply_text(f"{str(e)}\n\n{exercises_list}")
+        else:
+            try:
+                self.db.add_set(
+                    workout_id=workout_id,
+                    exercise_name=exercise_data['exercise'],
+                    reps=exercise_data['reps'],
+                    weight=exercise_data.get('weight'),
+                    set_number=exercise_data.get('set_number')
+                )
+                confirmation = self.report_generator.format_exercise_confirmation(exercise_data)
+                await update.message.reply_text(confirmation)
+            except Exception as e:
+                logging.error(f"Помилка додавання вправи: {str(e)}")
+                await update.message.reply_text("❌ Помилка при додаванні вправи")
 
     async def handle_voice_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
@@ -123,7 +130,7 @@ class WorkoutHandlers:
 
         workout_id = self.db.get_active_workout(user_id)
         if not workout_id:
-            await update.message.reply_text("⚠️ Спочатку розпочніть тренування, натиснувши '🏁 Старт тренування'")
+            await update.message.reply_text("⚠️ Спочатку розпочніть тренування")
             return
 
         processing_msg = await update.message.reply_text("🎤 Обробляю голосове повідомлення...")
@@ -136,36 +143,40 @@ class WorkoutHandlers:
             await processing_msg.delete()
 
             if not text:
-                await update.message.reply_text("❌ Не вдалося розпізнати голосове повідомлення. Спробуйте говорити чіткіше.")
+                await update.message.reply_text("❌ Не вдалося розпізнати голосове повідомлення")
                 return
 
             await update.message.reply_text(f"👂 Я почув: \"{text}\"")
 
-            exercise_data = self.parser.parse_exercise_input(text)
-            if not exercise_data:
+            exercise_data, error_type = self.parser.parse_exercise_input(text)
+            
+            if error_type == "unknown_exercise":
+                exercises_list = self.get_formatted_exercises_list()
+                await update.message.reply_text(
+                    f"❌ Вправа '{text.split()[0]}' не знайдена в довіднику.\n\n"
+                    f"{exercises_list}"
+                )
+            elif error_type:
                 await update.message.reply_text(
                     "❌ Не можу розпізнати вправу з голосового повідомлення.\n\n"
                     "Спробуйте сказати так:\n"
-                    "• 'Зробив(-ла) віджимання 15 разів, перший підхід'\n"
-                    "• 'Жим лежачи 12 разів, другий підхід, 80 кілограм'"
+                    "'Зробив(-ла) віджимання 15 разів, перший підхід'\n"
+                    "'Жим лежачи 12 разів, другий підхід, 80 кілограм'"
                 )
-                return
-
-            try:
-                self.db.add_set(
-                    workout_id=workout_id,
-                    exercise_name=exercise_data['exercise'],
-                    reps=exercise_data['reps'],
-                    weight=exercise_data.get('weight'),
-                    set_number=exercise_data.get('set_number')
-                )
-
-                confirmation = self.report_generator.format_exercise_confirmation(exercise_data)
-                await update.message.reply_text(confirmation)
-
-            except ValueError as e:
-                exercises_list = self.get_formatted_exercises_list()
-                await update.message.reply_text(f"{str(e)}\n\n{exercises_list}")
+            else:
+                try:
+                    self.db.add_set(
+                        workout_id=workout_id,
+                        exercise_name=exercise_data['exercise'],
+                        reps=exercise_data['reps'],
+                        weight=exercise_data.get('weight'),
+                        set_number=exercise_data.get('set_number')
+                    )
+                    confirmation = self.report_generator.format_exercise_confirmation(exercise_data)
+                    await update.message.reply_text(confirmation)
+                except Exception as e:
+                    logging.error(f"Помилка додавання вправи: {str(e)}")
+                    await update.message.reply_text("❌ Помилка при додаванні вправи")
 
         except Exception as e:
             logging.error(f"Помилка обробки голосу: {e}", exc_info=True)
@@ -173,11 +184,10 @@ class WorkoutHandlers:
                 await processing_msg.delete()
             except:
                 pass
-            await update.message.reply_text("❌ Виникла помилка при обробці голосового повідомлення. Спробуйте ще раз.")
-
-
+            await update.message.reply_text("❌ Виникла помилка при обробці голосового повідомлення")
+            
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        
+            
         exercises_list = self.get_formatted_exercises_list()
         
         help_text = (
